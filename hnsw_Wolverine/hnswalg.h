@@ -1280,12 +1280,11 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
     }
 
-    #define VIOLENT_DELETE 0
-    #define PINTOPOUT_DELETE 1
-    #define SEARCH_DELETE 2
-    #define TWOHOP_DELETE 3
-    #define APPROXIMATE_TWOHOP_DELETE 4
-    #define REFACTOR_DELETE 5
+    #define Do 0
+    #define DwFC 1
+    #define Wolverine 2
+    #define WolverinePro 3
+    #define WolverineProMax 4
 
     void mulLink(tableint thePoint, int level,vector<pair<dist_t, tableint>> &cand){
         // cout<<cand.size()<<endl;
@@ -1422,7 +1421,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                         datal[i--] = datal[--size];
                     }
                 }
-                if(deleteModel==PINTOPOUT_DELETE && !deleteFlags[row]){
+                if(deleteModel==DwFC && !deleteFlags[row]){
                     size_t Mcurmax = level ? maxM_ : maxM0_;
                     unordered_set<tableint> cand_list;
                     for(int i=0;i<size;i++){
@@ -1450,14 +1449,14 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 setListCount(data,size);
             }
         });        
-        if(deleteModel>=SEARCH_DELETE){
+        if(deleteModel>=Wolverine){
             ParallelFor(0, internalDeleteList.size(), num_threads, [&](size_t row, size_t threadId) {
                 unordered_map<tableint,vector<vector<pair<dist_t, tableint>>>> newLink;
                 tableint internalId=internalDeleteList[row];
                 for(int level=element_levels_[internalId];level>=0;level--){
                     vector<tableint> internalId_datal=getConnectionsWithLock(internalId,level);
                     int internalId_size = internalId_datal.size();
-                    if(deleteModel==SEARCH_DELETE){
+                    if(deleteModel==Wolverine){
                         for(int linkID=0;linkID<internalId_size;linkID++){
                             tableint thePoint=internalId_datal[linkID];
                             std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
@@ -1466,7 +1465,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             addCandToNewLink(newLink,top_candidates,level,thePoint);
                         }
                     }
-                    else if(deleteModel==TWOHOP_DELETE){
+                    else if(deleteModel==WolverinePro){
                         for(int linkID=0;linkID<internalId_size;linkID++){
                             tableint thePoint=internalId_datal[linkID];
                             unordered_set<tableint> predict_list;
@@ -1487,7 +1486,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             addCandToNewLink(newLink,top_candidates,level,thePoint);
                         }
                     }
-                    else if(deleteModel==APPROXIMATE_TWOHOP_DELETE){
+                    else if(deleteModel==WolverineProMax){
                         for(int linkID=0;linkID<internalId_size;linkID++){
                             tableint thePoint=internalId_datal[linkID];
                             tableint deletePoint=internalId;

@@ -1,5 +1,5 @@
-#include "hnswlib_delete/hnswlib.h"
-#include "SIFT_bin_search.h"
+#include "hnsw_Wolverine/hnswlib.h"
+#include "hnsw_Wolverine/hnsw_Wolverine.h"
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -50,7 +50,7 @@ int main(int argc, char* argv[]) {
     int ef=200;
     int num_threads = 64;
     int newLinkSize=M;
-    string deleteModelName[]={"VIOLENT_DELETE","PINTOPOUT_DELETE","SEARCH_DELETE","TWOHOP_DELETE","APPROXIMATE_TWOHOP_DELETE","REFACTOR_DELETE"};
+    string deleteModelName[]={"Do","DwFC","Wolverine","WolverinePro","WolverineProMax"};
 
     if(argc!=13&&argc!=1){
         cout<<"Missing parameters!!!!!!!!!!!!!!  "<<argc<<endl;

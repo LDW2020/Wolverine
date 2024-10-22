@@ -1,9 +1,9 @@
 CXX=g++
 GRAPH=HNSW
 DELETE_MODEL=DM_ATWOHOP
-CXXFLAGS= -I. -std=c++17 -Ofast -pthread -fopenmp -D__AVX__ -mavx2 -D$(GRAPH) #-D$(DELETE_MODEL)# -DDATATYPE=float  
-TARGET=SIFT_bin_search
-SRC=SIFT_bin_search.cpp
+CXXFLAGS= -I. -std=c++17 -Ofast -pthread -fopenmp -D__AVX__ -mavx2 -D$(GRAPH)
+TARGET=hnsw_Wolverine_test
+SRC=hnsw_Wolverine_test.cpp
 
 
 all: $(TARGET)
