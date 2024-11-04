@@ -1,7 +1,7 @@
 # Wolverine
 This is the source code of Wolverine.
 
-Our paper, "Wolverine: Highly Efficient Monotonic Search Path Repair for Graph-based ANN Index Updates", is submitted to SIGMOD2025.
+Our paper, "Wolverine: Highly Efficient Monotonic Search Path Repair for Graph-based ANN Index Updates", is submitted to PVLDB2025.
 
 ## Directory description
   * datasets: The dataset required for Wolverine has the following format: the first 4 bytes (int32_t) indicates the size of the datasets, the second 4 bytes (int32_t) indicates the dimensions of the vectors, then each vector data (float) is closely packed.
