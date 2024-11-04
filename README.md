@@ -19,4 +19,6 @@ All experiments are conducted on a machine with an AMD EPYC 7K62 48-Core Process
 
    `$ cd Wolverine`
    
+   `$ mkdir index`
+
    `$ ./test.sh`
