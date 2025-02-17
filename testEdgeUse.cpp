@@ -1,4 +1,4 @@
-#include "hnsw_Wolverine/hnswlib.h"
+#include "hnswlib_delete/hnswlib.h"
 #include "hnsw_Wolverine/hnsw_Wolverine.h"
 #include <fstream>
 #include <iostream>
@@ -12,17 +12,6 @@
 #include <random>
 
 using namespace std;
-
-template <typename dist_t>
-void readData(
-    std::ifstream& data_reader,
-    dist_t*& data,
-    int32_t &dim,
-    size_t readLen,
-    size_t vectorP
-){
-    data_reader.read((char*)data+vectorP*dim*sizeof(float), readLen * dim * sizeof(float));
-}
 
 int main(int argc, char* argv[]) {
     int32_t dim = 0;               // Dimension of the elements
@@ -44,7 +33,7 @@ int main(int argc, char* argv[]) {
     string groundtruth_file_path="./dataset/sift_query_learn_gt100";
     string search_result_file_path="./search_result";
     string index_prefix="./index/hnsw";
-    int K=10;
+    int K=100;
     vector<size_t>deleteList;
     int M=16;
     int ef=200;
@@ -81,26 +70,11 @@ int main(int argc, char* argv[]) {
         <<groundtruth_file_path<<" search_result_file_path: "<<search_result_file_path<<" index_prefix: "<<index_prefix<<endl;
     cout<<"-----------------------------------------------------------------------------------"<<endl;
 
-    // readInitData<float>(dim,max_elements,data,data_file_path);
-// read data
-    cout<<"Read data"<<endl;
-    std::ifstream ini_data_reader(data_file_path, std::ios::binary);
-    if(!ini_data_reader.is_open()){
-        cout<<"ini_data_reader open failed!!!!"<<endl;
-        throw;
-    }
-    ini_data_reader.read((char*)&max_elements,sizeof(int32_t));
-    ini_data_reader.read((char*)&dim,sizeof(int32_t));
-    if(max_elements>1000000){
-        cout<<"max_elements>1000000"<<endl;
-        max_elements=1000000;
-    }
-    data = new float[dim * max_elements];
-    ini_data_reader.read((char*)data, max_elements * dim * sizeof(float));
-    ini_data_reader.close();
-
+    readInitData<float>(dim,max_elements,data,data_file_path);
     readQuerys<float>(query_sum,query_dim,querys,query_file_path);
-
+    readGroundTruth<float>(groundtruth_sum,groundtruth_dim,groundtruth,groundtruth_file_path,K);
+    
+    // query_sum=100;
     cout<<"max_elements: "<<max_elements<<" dim: "<<dim<<endl;
     cout<<"query_sum: "<<query_sum<<" query_dim: "<<query_dim<<endl;
     cout<<"groundtruth_sum: "<<groundtruth_sum<<" groundtruth_dim: "<<groundtruth_dim<<endl;
@@ -109,50 +83,61 @@ int main(int argc, char* argv[]) {
     hnswlib::L2Space space(dim);
 
     hnswlib::HierarchicalNSW<float>* alg_hnsw=nullptr;
+    hnswlib::HierarchicalNSW<float>* alg_hnsw_old=nullptr;
     pair<float,double> search_result;
     std::ofstream result_writer(search_result_file_path);
-    result_writer<<"recall,search_OPS,delete_OPS,insert_OPS"<<endl;
+    result_writer<<"usedTimes,amount,part"<<endl;
+    unsigned int seed=100;
+    default_random_engine random(seed);
+    uniform_int_distribution<size_t> dis1(0, max_elements-1);
     creat_index(alg_hnsw,index_prefix,&space,M,ef,dim,max_elements,data,num_threads);
+    creat_index(alg_hnsw_old,index_prefix,&space,M,ef,dim,max_elements,data,num_threads);
+    cout<<"maxlevel_: "<<alg_hnsw->maxlevel_<<endl;
+
+    cout<<"start delete"<<endl;
+    creat_deleteList(deleteList,max_elements*delete_parts*2,max_elements*delete_parts,random,dis1);
+    double deleteTime=deleteIndex(alg_hnsw,deleteList,delete_model,num_threads,newLinkSize);
+    vector<pair<pair<tableint,tableint>,size_t>> newEdgeList;
+    
+    newEdgeList=getNewEdge(alg_hnsw_old,alg_hnsw);
+    cout<<"getNewEdge finish!!!!!!!"<<endl;
+
     cout<<"start search"<<endl;
-    std::ifstream data_reader(data_file_path, std::ios::binary);
-    data_reader.seekg(8+max_elements*dim*sizeof(float),ios::beg);
-    size_t readLen=max_elements*delete_parts;
-    size_t vectorP=0;
-    size_t fileVectorP=0;
-    string now_groundTruth_path=groundtruth_file_path+to_string(fileVectorP)+'-'+to_string(fileVectorP+max_elements);
-    // cout<<"now_groundTruth_path: "<<now_groundTruth_path<<endl;
-    readGroundTruth<float>(groundtruth_sum,groundtruth_dim,groundtruth,now_groundTruth_path,K);
-    for(int i=0;i<groundtruth_sum*groundtruth_dim;i++){
-        groundtruth[i]+=fileVectorP;
+    vector<std::priority_queue<std::pair<float, hnswlib::labeltype>>> result(query_sum);
+    for(size_t row=0;row<query_sum;row++){
+        vector<tableint> visitedNodes;
+        result[row] = alg_hnsw->searchKnn((void*)((char*)querys + row * query_dim * sizeof(float)), K,visitedNodes);
+        ParallelFor(0, newEdgeList.size(), num_threads, [&](size_t row, size_t threadId) {
+            for(int i=0;i<visitedNodes.size();i++){
+                if(visitedNodes[i]==newEdgeList[row].first.first){
+                    tableint *data = alg_hnsw->get_linklist_at_level(visitedNodes[i], 0);
+                    int size = alg_hnsw->getListCount(data);
+                    tableint *datal = (tableint *) (data + 1);
+                    if(find(datal,datal+size,newEdgeList[row].first.second)!=datal+size&&find(visitedNodes.begin()+i,visitedNodes.end(),newEdgeList[row].first.second)!=visitedNodes.end()){
+                        newEdgeList[row].second++;
+                    }
+                    continue;
+                }
+            }
+        });
+        show_progress_bar(row,query_sum);
     }
-    search_result=search_index(alg_hnsw,K,query_sum,query_dim,querys,groundtruth_sum,groundtruth_dim,groundtruth,num_threads);
-    for(int cir_times=0;cir_times<circul_sum;cir_times++){
-        string now_groundTruth_path=groundtruth_file_path+to_string(fileVectorP)+'-'+to_string(fileVectorP+max_elements);
-        // cout<<"now_groundTruth_path: "<<now_groundTruth_path<<endl;
-        readGroundTruth<float>(groundtruth_sum,groundtruth_dim,groundtruth,now_groundTruth_path,K);
-        for(int i=0;i<groundtruth_sum*groundtruth_dim;i++){
-            groundtruth[i]+=fileVectorP;
+    cout<<"finish!!!!!!!"<<endl;
+
+    vector<int> usedTimes(query_sum+1,0);
+    for(int i=0;i<newEdgeList.size();i++){
+        usedTimes[newEdgeList[i].second]++;
+        // result_writer<<'('<<newEdgeList[i].first.first<<','<<newEdgeList[i].first.second<<"): "<<newEdgeList[i].second<<endl;
+    }
+    int partSum=0;
+    for(int i=0;i<usedTimes.size();i++){
+        partSum+=usedTimes[i];
+        if(i%(usedTimes.size()/100)==0){
+            result_writer<<i<<","<<partSum<<","<<(float)partSum/(float)newEdgeList.size()<<endl;
+            partSum=0;
         }
-
-        search_result=search_index(alg_hnsw,K,query_sum,query_dim,querys,groundtruth_sum,groundtruth_dim,groundtruth,num_threads);
-        cout<<"cir_times: "<<cir_times<<'\t'<<"recall: "<<search_result.first<<'\t'<<"search_OPS: "<<search_result.second<<" query\\second\t";
-        result_writer<<search_result.first<<','<<search_result.second<<',';
-
-        double deleteTime=deleteIndex(alg_hnsw,fileVectorP,readLen,delete_model,num_threads,newLinkSize);
-        cout<<"delete_ops: "<<deleteTime<<" point\\second\t";
-        result_writer<<deleteTime<<',';
-
-        data_reader.read((char*)data+vectorP*dim*sizeof(float), readLen * dim * sizeof(float));
-        
-        double addTime_avg=addPoint(alg_hnsw,fileVectorP+max_elements,readLen,vectorP,num_threads,data,dim);
-        cout<<"add_ops: "<<addTime_avg<<" point\\second"<<endl;
-        result_writer<<addTime_avg<<endl;
-
-        fileVectorP+=readLen;
-        vectorP+=readLen;
-        vectorP%=max_elements;
     }
-    data_reader.close();
+
     result_writer.close();
     delete[] data;
     delete[] querys;

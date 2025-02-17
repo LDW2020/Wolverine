@@ -3,7 +3,7 @@
 
 // #define moreLink
 
-#if (defined TestVamana)||(defined NSW)
+#if (defined TestVamana)||(defined NSW)||(defined NSG)
 #define LAYER0
 #endif
 
@@ -416,7 +416,6 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         return top_candidates;
     }
 
-
     // bare_bone_search means there is no check for deletions and stop condition is ignored in return of extra performance
     template <bool bare_bone_search = true, bool collect_metrics = false>
     std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
@@ -496,6 +495,144 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
 #endif
                 if (!(visited_array[candidate_id] == visited_array_tag)) {
                     visited_array[candidate_id] = visited_array_tag;
+
+                    char *currObj1 = (getDataByInternalId(candidate_id));
+                    dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
+
+                    bool flag_consider_candidate;
+                    if (!bare_bone_search && stop_condition) {
+                        flag_consider_candidate = stop_condition->should_consider_candidate(dist, lowerBound);
+                    } else {
+                        flag_consider_candidate = top_candidates.size() < ef || lowerBound > dist;
+                    }
+
+                    if (flag_consider_candidate) {
+                        candidate_set.emplace(-dist, candidate_id);
+#ifdef USE_SSE
+                        _mm_prefetch(data_level0_memory_ + candidate_set.top().second * size_data_per_element_ +
+                                        offsetLevel0_,  ///////////
+                                        _MM_HINT_T0);  ////////////////////////
+#endif
+
+                        if (bare_bone_search || 
+                            (!isMarkedDeleted(candidate_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(candidate_id))))) {
+                            top_candidates.emplace(dist, candidate_id);
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->add_point_to_result(getExternalLabel(candidate_id), currObj1, dist);
+                            }
+                        }
+
+                        bool flag_remove_extra = false;
+                        if (!bare_bone_search && stop_condition) {
+                            flag_remove_extra = stop_condition->should_remove_extra();
+                        } else {
+                            flag_remove_extra = top_candidates.size() > ef;
+                        }
+                        while (flag_remove_extra) {
+                            tableint id = top_candidates.top().second;
+                            top_candidates.pop();
+                            if (!bare_bone_search && stop_condition) {
+                                stop_condition->remove_point_from_result(getExternalLabel(id), getDataByInternalId(id), dist);
+                                flag_remove_extra = stop_condition->should_remove_extra();
+                            } else {
+                                flag_remove_extra = top_candidates.size() > ef;
+                            }
+                        }
+
+                        if (!top_candidates.empty())
+                            lowerBound = top_candidates.top().first;
+                    }
+                }
+            }
+        }
+
+        visited_list_pool_->releaseVisitedList(vl);
+        return top_candidates;
+    }
+
+
+    // bare_bone_search means there is no check for deletions and stop condition is ignored in return of extra performance
+    template <bool bare_bone_search = true, bool collect_metrics = false>
+    std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst>
+    searchBaseLayerST(
+        tableint ep_id,
+        const void *data_point,
+        size_t ef,
+        vector<tableint>& visitedNodes,
+        BaseFilterFunctor* isIdAllowed = nullptr,
+        BaseSearchStopCondition<dist_t>* stop_condition = nullptr) const {
+        VisitedList *vl = visited_list_pool_->getFreeVisitedList();
+        vl_type *visited_array = vl->mass;
+        vl_type visited_array_tag = vl->curV;
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> candidate_set;
+
+        dist_t lowerBound;
+        if (bare_bone_search || 
+            (!isMarkedDeleted(ep_id) && ((!isIdAllowed) || (*isIdAllowed)(getExternalLabel(ep_id))))) {
+            char* ep_data = getDataByInternalId(ep_id);
+            dist_t dist = fstdistfunc_(data_point, ep_data, dist_func_param_);
+            lowerBound = dist;
+            top_candidates.emplace(dist, ep_id);
+            if (!bare_bone_search && stop_condition) {
+                stop_condition->add_point_to_result(getExternalLabel(ep_id), ep_data, dist);
+            }
+            candidate_set.emplace(-dist, ep_id);
+        } else {
+            lowerBound = std::numeric_limits<dist_t>::max();
+            candidate_set.emplace(-lowerBound, ep_id);
+        }
+
+        visited_array[ep_id] = visited_array_tag;
+        visitedNodes.emplace_back(ep_id);
+
+        while (!candidate_set.empty()) {
+            std::pair<dist_t, tableint> current_node_pair = candidate_set.top();
+            dist_t candidate_dist = -current_node_pair.first;
+
+            bool flag_stop_search;
+            if (bare_bone_search) {
+                flag_stop_search = candidate_dist > lowerBound;
+            } else {
+                if (stop_condition) {
+                    flag_stop_search = stop_condition->should_stop_search(candidate_dist, lowerBound);
+                } else {
+                    flag_stop_search = candidate_dist > lowerBound && top_candidates.size() == ef;
+                }
+            }
+            if (flag_stop_search) {
+                break;
+            }
+            candidate_set.pop();
+
+            tableint current_node_id = current_node_pair.second;
+            int *data = (int *) get_linklist0(current_node_id);
+            size_t size = getListCount((linklistsizeint*)data);
+//                bool cur_node_deleted = isMarkedDeleted(current_node_id);
+            if (collect_metrics) {
+                metric_hops++;
+                metric_distance_computations+=size;
+            }
+
+#ifdef USE_SSE
+            _mm_prefetch((char *) (visited_array + *(data + 1)), _MM_HINT_T0);
+            _mm_prefetch((char *) (visited_array + *(data + 1) + 64), _MM_HINT_T0);
+            _mm_prefetch(data_level0_memory_ + (*(data + 1)) * size_data_per_element_ + offsetData_, _MM_HINT_T0);
+            _mm_prefetch((char *) (data + 2), _MM_HINT_T0);
+#endif
+
+            for (size_t j = 1; j <= size; j++) {
+                int candidate_id = *(data + j);
+//                    if (candidate_id == 0) continue;
+#ifdef USE_SSE
+                _mm_prefetch((char *) (visited_array + *(data + j + 1)), _MM_HINT_T0);
+                _mm_prefetch(data_level0_memory_ + (*(data + j + 1)) * size_data_per_element_ + offsetData_,
+                                _MM_HINT_T0);  ////////////
+#endif
+                if (!(visited_array[candidate_id] == visited_array_tag)) {
+                    visited_array[candidate_id] = visited_array_tag;
+                    visitedNodes.emplace_back(candidate_id);
 
                     char *currObj1 = (getDataByInternalId(candidate_id));
                     dist_t dist = fstdistfunc_(data_point, currObj1, dist_func_param_);
@@ -990,6 +1127,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             throw std::runtime_error("Label not found");
         }
         tableint internalId = search->second;
+        label_lookup_.erase(label);
         lock_table.unlock();
 
         markDeletedInternal(internalId);
@@ -1280,11 +1418,12 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         }
     }
 
-    #define Do 0
-    #define DwFC 1
-    #define Wolverine 2
-    #define WolverinePro 3
-    #define WolverineProMax 4
+    #define VIOLENT_DELETE 0
+    #define PINTOPOUT_DELETE 1
+    #define SEARCH_DELETE 2
+    #define TWOHOP_DELETE 3
+    #define APPROXIMATE_TWOHOP_DELETE 4
+    #define REFACTOR_DELETE 5
 
     void mulLink(tableint thePoint, int level,vector<pair<dist_t, tableint>> &cand){
         // cout<<cand.size()<<endl;
@@ -1408,6 +1547,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 throw;
             }
         }
+        // int* modifyNum= new int[num_threads];
+        // for(int i=0;i<num_threads;i++){
+        //     modifyNum[i]=0;
+        // }
         ParallelFor(0, cur_element_count, num_threads, [&](size_t row, size_t threadId) {
             for(int level=element_levels_[row];level>=0;level--){   //update inpoint  
                 std::unique_lock <std::mutex> lock(link_list_locks_[row]);
@@ -1415,13 +1558,18 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 int size = getListCount(data);
                 tableint *datal = (tableint *) (data + 1);
                 vector<tableint> connectedDeletePoint;
+                // bool modifyFlag=false;
                 for(int i=0;i<size;i++){
                     if(deleteFlags[datal[i]]){
                         connectedDeletePoint.emplace_back(datal[i]);
                         datal[i--] = datal[--size];
+                        // modifyFlag=true;
                     }
                 }
-                if(deleteModel==DwFC && !deleteFlags[row]){
+                // if(level==0&&modifyFlag){
+                //     modifyNum[threadId]++;
+                // }
+                if(deleteModel==PINTOPOUT_DELETE && !deleteFlags[row]){
                     size_t Mcurmax = level ? maxM_ : maxM0_;
                     unordered_set<tableint> cand_list;
                     for(int i=0;i<size;i++){
@@ -1448,15 +1596,20 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                 }
                 setListCount(data,size);
             }
-        });        
-        if(deleteModel>=Wolverine){
+        });   
+        // int modifysum=0;
+        // for(int i=0;i<num_threads;i++){
+        //     modifysum+=modifyNum[i];
+        // } 
+        // cout<<endl<<"modifysum/cur_element_count: "<<modifysum<<"/"<<cur_element_count<<endl;
+        if(deleteModel>=SEARCH_DELETE){
             ParallelFor(0, internalDeleteList.size(), num_threads, [&](size_t row, size_t threadId) {
                 unordered_map<tableint,vector<vector<pair<dist_t, tableint>>>> newLink;
                 tableint internalId=internalDeleteList[row];
                 for(int level=element_levels_[internalId];level>=0;level--){
                     vector<tableint> internalId_datal=getConnectionsWithLock(internalId,level);
                     int internalId_size = internalId_datal.size();
-                    if(deleteModel==Wolverine){
+                    if(deleteModel==SEARCH_DELETE){
                         for(int linkID=0;linkID<internalId_size;linkID++){
                             tableint thePoint=internalId_datal[linkID];
                             std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
@@ -1465,7 +1618,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             addCandToNewLink(newLink,top_candidates,level,thePoint);
                         }
                     }
-                    else if(deleteModel==WolverinePro){
+                    else if(deleteModel==TWOHOP_DELETE){
                         for(int linkID=0;linkID<internalId_size;linkID++){
                             tableint thePoint=internalId_datal[linkID];
                             unordered_set<tableint> predict_list;
@@ -1486,7 +1639,7 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                             addCandToNewLink(newLink,top_candidates,level,thePoint);
                         }
                     }
-                    else if(deleteModel==WolverineProMax){
+                    else if(deleteModel==APPROXIMATE_TWOHOP_DELETE){
                         for(int linkID=0;linkID<internalId_size;linkID++){
                             tableint thePoint=internalId_datal[linkID];
                             tableint deletePoint=internalId;
@@ -1502,9 +1655,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
                                     for(tableint twoHopPoint:thePoint_twoHopList){
                                         dist_t deletePoint_to_twoHop_dist=fstdistfunc_(getDataByInternalId(deletePoint), getDataByInternalId(twoHopPoint), dist_func_param_);
                                         dist_t thePoint_to_twoHop_dist=fstdistfunc_(getDataByInternalId(thePoint), getDataByInternalId(twoHopPoint), dist_func_param_);
-                                        if(deletePoint_to_twoHop_dist>thePoint_to_deletePoint_dist
-                                        && thePoint_to_twoHop_dist<thePoint_to_deletePoint_dist
-                                        && thePoint_to_twoHop_dist+thePoint_to_deletePoint_dist>deletePoint_to_twoHop_dist
+                                        if(
+                                        deletePoint_to_twoHop_dist>thePoint_to_deletePoint_dist &&
+                                        thePoint_to_twoHop_dist<thePoint_to_deletePoint_dist && 
+                                        thePoint_to_twoHop_dist+thePoint_to_deletePoint_dist>deletePoint_to_twoHop_dist
                                         ){
                                             predict_list.emplace(twoHopPoint);
                                             if(predict_list.size()>2*newLinkSize)break;
@@ -1588,6 +1742,62 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
         } else {
             top_candidates = searchBaseLayerST<false>(
                     currObj, query_data, std::max(ef_, k), isIdAllowed);
+        }
+
+        while (top_candidates.size() > k) {
+            top_candidates.pop();
+        }
+        while (top_candidates.size() > 0) {
+            std::pair<dist_t, tableint> rez = top_candidates.top();
+            result.push(std::pair<dist_t, labeltype>(rez.first, getExternalLabel(rez.second)));
+            top_candidates.pop();
+        }
+        return result;
+    }
+
+    std::priority_queue<std::pair<dist_t, labeltype >>
+    searchKnn(const void *query_data, size_t k,vector<tableint>& visitedNodes, BaseFilterFunctor* isIdAllowed = nullptr) const {
+        std::priority_queue<std::pair<dist_t, labeltype >> result;
+        if (cur_element_count == 0) return result;
+
+        tableint currObj = enterpoint_node_;
+        dist_t curdist = fstdistfunc_(query_data, getDataByInternalId(enterpoint_node_), dist_func_param_);
+
+        for (int level = maxlevel_; level > 0; level--) {
+            bool changed = true;
+            while (changed) {
+                changed = false;
+                unsigned int *data;
+
+                data = (unsigned int *) get_linklist(currObj, level);
+                int size = getListCount(data);
+                metric_hops++;
+                metric_distance_computations+=size;
+
+                tableint *datal = (tableint *) (data + 1);
+                for (int i = 0; i < size; i++) {
+                    tableint cand = datal[i];
+                    if (cand < 0 || cand > max_elements_)
+                        throw std::runtime_error("cand error");
+                    dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+
+                    if (d < curdist) {
+                        curdist = d;
+                        currObj = cand;
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        std::priority_queue<std::pair<dist_t, tableint>, std::vector<std::pair<dist_t, tableint>>, CompareByFirst> top_candidates;
+        bool bare_bone_search = !num_deleted_ && !isIdAllowed;
+        if (bare_bone_search) {
+            top_candidates = searchBaseLayerST<true>(
+                    currObj, query_data, std::max(ef_, k),visitedNodes, isIdAllowed);
+        } else {
+            top_candidates = searchBaseLayerST<false>(
+                    currObj, query_data, std::max(ef_, k),visitedNodes, isIdAllowed);
         }
 
         while (top_candidates.size() > k) {
@@ -1685,6 +1895,10 @@ class HierarchicalNSW : public AlgorithmInterface<dist_t> {
             std::cout << "Min inbound: " << min1 << ", Max inbound:" << max1 << "\n";
         }
         std::cout << "integrity ok, checked " << connections_checked << " connections\n";
+    }
+
+    dist_t cluDis(const void *query_data,const void * b){
+        return fstdistfunc_(query_data, b, dist_func_param_);
     }
 };
 }  // namespace hnswlib

@@ -1,4 +1,4 @@
-#include "hnsw_Wolverine/hnswlib.h"
+#include "hnswlib.h"
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -12,6 +12,7 @@
 #include <omp.h>
 
 using namespace std;
+typedef unsigned int tableint;
 
 // Multithreaded executor
 // The helper function copied from python_bindings/bindings.cpp (and that itself is copied from nmslib)
@@ -121,9 +122,8 @@ void readGroundTruth(int32_t &groundtruth_sum,int32_t &groundtruth_dim,uint32_t*
     }
     groundtruth_reader.read((char*)groundtruth, groundtruth_sum * groundtruth_dim * sizeof(uint32_t));
     groundtruth_reader.close();
-
     if(groundtruth_dim<K){
-        cout<<"groundtruth_dim too small!!!!";
+        cout<<"groundtruth_dim too small!!!!"<<endl;
         throw;
     }
 }
@@ -136,8 +136,10 @@ void creat_index(hnswlib::HierarchicalNSW<dist_t>*& alg_hnsw,string index_prefix
 
     #ifdef NSW
     string index_path=index_prefix+".nswindex";
-    #elif defined VAMANA
+    #elif defined TestVamana
     string index_path=index_prefix+".vamanaindex";
+    #elif defined NSG
+    string index_path=index_prefix+".hnswnsgindex";
     #else
     string index_path=index_prefix+".hnswindex";
     #endif
@@ -237,6 +239,19 @@ void write_Vector(vector<size_t> vec,string file_path){
 #define mulThreadsDelete
 
 template <typename dist_t>
+double psedo_deleteIndex(hnswlib::HierarchicalNSW<dist_t>* alg_hnsw,vector<size_t> deleteList,int delete_model,int num_threads,int newLinkSize){
+    struct timeval delete_start_time,delete_end_time;
+    double delete_time=0;
+    gettimeofday(&delete_start_time,NULL);
+    for(int row=0;row<deleteList.size();row++){
+        alg_hnsw->markDelete(deleteList[row]);
+    }
+    gettimeofday(&delete_end_time,NULL);
+    delete_time=(double)(delete_end_time.tv_sec-delete_start_time.tv_sec)+(double)(delete_end_time.tv_usec-delete_start_time.tv_usec)/1000000;
+    return deleteList.size()/delete_time;
+}
+
+template <typename dist_t>
 double deleteIndex(hnswlib::HierarchicalNSW<dist_t>* alg_hnsw,vector<size_t> deleteList,int delete_model,int num_threads,int newLinkSize){
     struct timeval delete_start_time,delete_end_time;
     double delete_time=0;
@@ -297,4 +312,45 @@ double addPoint(hnswlib::HierarchicalNSW<dist_t>* alg_hnsw,size_t addStart,size_
     gettimeofday(&add_end_time,NULL);
     addTime_avg+=(double)(add_end_time.tv_sec-add_start_time.tv_sec)+(double)(add_end_time.tv_usec-add_start_time.tv_usec)/1000000;
     return addLen/addTime_avg;
+}
+
+
+template <typename dist_t>
+vector<pair<pair<tableint,tableint>,size_t>> getNewEdge(hnswlib::HierarchicalNSW<dist_t>* alg_hnsw1,hnswlib::HierarchicalNSW<dist_t>* alg_hnsw2){
+    vector<pair<pair<tableint,tableint>,size_t>> newEdgeList;
+    for(tableint i=0;i<alg_hnsw2->cur_element_count;i++){
+        if(alg_hnsw2->deleteFlags[i]==false){
+            tableint *data2 = alg_hnsw2->get_linklist_at_level(i, 0);
+            int size2 = alg_hnsw2->getListCount(data2);
+            tableint *datal2 = (tableint *) (data2 + 1);
+
+            tableint *data1 = alg_hnsw1->get_linklist_at_level(i, 0);
+            int size1 = alg_hnsw1->getListCount(data1);
+            tableint *datal1 = (tableint *) (data1 + 1);
+
+            for(size_t j=0;j<size2;j++){
+                if(find(datal1,datal1+size1,datal2[j])==datal1+size1){
+                    newEdgeList.emplace_back(make_pair(make_pair(i,datal2[j]),0));
+                }
+            }
+        }
+    }
+    return newEdgeList;
+}
+
+void show_progress_bar(int progress, int total) {
+    const int bar_width = 100;  // 进度条的宽度
+    float progress_percentage = (float)progress / total;  // 计算进度百分比
+    int pos = bar_width * progress_percentage;  // 计算已完成的进度部分
+
+    std::cout << "\r[";
+    for (int i = 0; i < bar_width; ++i) {
+        if (i < pos)
+            std::cout << "#";  // 显示进度
+        else
+            std::cout << " ";  // 显示剩余部分
+    }
+
+    std::cout << "] " << int(progress_percentage * 100.0) << "%";
+    std::flush(std::cout);  // 强制刷新输出，确保进度条及时更新
 }

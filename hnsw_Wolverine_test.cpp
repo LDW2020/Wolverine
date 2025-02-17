@@ -33,13 +33,13 @@ int main(int argc, char* argv[]) {
     string groundtruth_file_path="./dataset/sift_query_learn_gt100";
     string search_result_file_path="./search_result";
     string index_prefix="./index/hnsw";
-    int K=100;
+    int K=10;
     vector<size_t>deleteList;
     int M=16;
     int ef=200;
     int num_threads = 64;
     int newLinkSize=M;
-    string deleteModelName[]={"Do","DwFC","Wolverine","WolverinePro","WolverineProMax"};
+    string deleteModelName[]={"VIOLENT_DELETE","PINTOPOUT_DELETE","SEARCH_DELETE","TWOHOP_DELETE","APPROXIMATE_TWOHOP_DELETE","REFACTOR_DELETE"};
 
     if(argc!=13&&argc!=1){
         cout<<"Missing parameters!!!!!!!!!!!!!!  "<<argc<<endl;
@@ -89,20 +89,24 @@ int main(int argc, char* argv[]) {
     default_random_engine random(seed);
     uniform_int_distribution<size_t> dis1(0, max_elements-1);
     creat_index(alg_hnsw,index_prefix,&space,M,ef,dim,max_elements,data,num_threads);
+    #ifdef PSEDO
+    cout<<endl<<"psedo_deletion!!!!!!!!!!!"<<endl;
+    alg_hnsw->resizeIndex(10000000);
+    #endif
     cout<<"maxlevel_: "<<alg_hnsw->maxlevel_<<endl;
     cout<<"start search"<<endl;
+    search_result=search_index(alg_hnsw,K,query_sum,query_dim,querys,groundtruth_sum,groundtruth_dim,groundtruth,num_threads);
     for(int cir_times=0;cir_times<circul_sum;cir_times++){
         search_result=search_index(alg_hnsw,K,query_sum,query_dim,querys,groundtruth_sum,groundtruth_dim,groundtruth,num_threads);
         cout<<"cir_times: "<<cir_times<<'\t'<<"recall: "<<search_result.first<<'\t'<<"search_OPS: "<<search_result.second<<" query\\second\t";
         result_writer<<search_result.first<<','<<search_result.second<<',';
         creat_deleteList(deleteList,max_elements*delete_parts*2,max_elements*delete_parts,random,dis1);
         write_Vector(deleteList,"deleteList");
-        // // read_Vector(deleteList,"deleteList");
-        // if(find(deleteList.begin(),deleteList.end(),*(alg_hnsw->getExternalLabeLp(alg_hnsw->enterpoint_node_)))==deleteList.end()){
-        //     deleteList.emplace_back(*(alg_hnsw->getExternalLabeLp(alg_hnsw->enterpoint_node_)));
-        //     cout<<"enterPoint: "<<*(alg_hnsw->getExternalLabeLp(alg_hnsw->enterpoint_node_))<<"\t";
-        // }
+        #ifdef PSEDO
+        double deleteTime=psedo_deleteIndex(alg_hnsw,deleteList,delete_model,num_threads,newLinkSize);
+        #else
         double deleteTime=deleteIndex(alg_hnsw,deleteList,delete_model,num_threads,newLinkSize);
+        #endif
         cout<<"delete_ops: "<<deleteTime<<" point\\second\t";
         result_writer<<deleteTime<<',';
         double addTime_avg=addPoint(alg_hnsw,deleteList,num_threads,data,dim);
